@@ -432,7 +432,7 @@ mod integration {
 
     use api::ErrorMessage;
 
-    use crate::{OpenAIClient, OpenAIError, api};
+    use crate::{api, OpenAIClient, OpenAIError};
 
     /// Used by tests to get a client to the actual api
     fn get_client() -> OpenAIClient {
@@ -452,11 +452,16 @@ mod integration {
         let client = get_client();
         let result = client.engine(api::Engine::Ada).await;
         match result {
-            Err(OpenAIError::APIError(ErrorMessage{message, error_type})) => {
+            Err(OpenAIError::APIError(ErrorMessage {
+                message,
+                error_type,
+            })) => {
                 assert_eq!(message, "No engine with that ID: ada");
                 assert_eq!(error_type, "invalid_request_error");
             }
-            _ => {panic!("Expected an error message, got {:?}", result)}
+            _ => {
+                panic!("Expected an error message, got {:?}", result)
+            }
         }
     }
 
