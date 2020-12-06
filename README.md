@@ -1,4 +1,5 @@
 # openai-api-rust
+![docs](https://docs.rs/openai-api/badge.svg)
 A simple rust client for OpenAI API.
 
 Has a few conveniences, but is mostly at the level of the API itself.
@@ -6,13 +7,13 @@ Has a few conveniences, but is mostly at the level of the API itself.
 # Installation
 
 ```
-$ cargo add openai-api-rust
+$ cargo add openai-api
 ```
 
 # Quickstart
 
 ```rust
-use openai_api::{api::CompletionArgs, OpenAIClient};
+use openai_api::OpenAIClient;
 
 #[tokio::main]
 async fn main() {
