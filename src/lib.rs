@@ -12,8 +12,8 @@ pub mod api {
     //! Data types corresponding to requests and responses from the API
     use std::collections::HashMap;
 
-    use serde::{Deserialize, Serialize};
     use super::OpenAIClient;
+    use serde::{Deserialize, Serialize};
 
     /// Container type. Used in the api, but not useful for clients of this library
     #[derive(Deserialize, Debug)]
@@ -63,7 +63,7 @@ pub mod api {
     pub struct CompletionArgs {
         #[builder(setter(into), default = "\"<|endoftext|>\".into()")]
         prompt: String,
-        #[builder(default="Engine::Davinci")]
+        #[builder(default = "Engine::Davinci")]
         #[serde(skip_serializing)]
         pub(super) engine: Engine,
         #[builder(default = "16")]
@@ -99,7 +99,9 @@ pub mod api {
         fn from(prompt_string: &str) -> Self {
             Self {
                 prompt: prompt_string.into(),
-                ..CompletionArgsBuilder::default().build().expect("default should build")
+                ..CompletionArgsBuilder::default()
+                    .build()
+                    .expect("default should build")
             }
         }
     }
@@ -112,7 +114,7 @@ pub mod api {
         }
 
         /// Request a completion from the api
-        /// 
+        ///
         /// # Errors
         /// `OpenAIError::APIError` if the api returns an error
         pub async fn complete(&self, client: &OpenAIClient) -> super::Result<Completion> {
@@ -122,7 +124,7 @@ pub mod api {
 
     impl CompletionArgsBuilder {
         /// Request a completion from the api
-        /// 
+        ///
         /// # Errors
         /// `OpenAIError::BadArguments` if the arguments to complete are not valid
         /// `OpenAIError::APIError` if the api returns an error
@@ -212,7 +214,7 @@ pub enum OpenAIError {
     APIError(api::ErrorMessage),
     /// An error the client discovers before talking to the API
     #[error("Bad arguments")]
-    BadArguments(String)
+    BadArguments(String),
 }
 
 impl From<api::ErrorMessage> for OpenAIError {
