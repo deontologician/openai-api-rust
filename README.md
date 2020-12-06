@@ -1,5 +1,7 @@
 # openai-api-rust
 ![docs](https://docs.rs/openai-api/badge.svg)
+![build](https://github.com/deontologician/openai-api-rust/workflows/Continuous%20Integration/badge.svg)
+
 A simple rust client for OpenAI API.
 
 Has a few conveniences, but is mostly at the level of the API itself.
