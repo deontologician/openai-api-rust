@@ -276,8 +276,9 @@ impl surf::middleware::Middleware for BearerToken {
     ) -> surf::Result<surf::Response> {
         log::debug!("Request: {:?}", req);
         req.insert_header("Authorization", format!("Bearer {}", self.token));
-        log::debug!("Request2: {:?}", req);
-        next.run(req, client).await
+        let response = next.run(req, client).await?;
+        log::debug!("Response: {:?}", response);
+        Ok(response)
     }
 }
 
