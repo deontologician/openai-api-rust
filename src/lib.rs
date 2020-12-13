@@ -116,8 +116,14 @@ pub mod api {
         ///
         /// # Errors
         /// `Error::APIError` if the api returns an error
-        pub async fn complete(&self, client: &Client) -> super::Result<Completion> {
-            client.complete_prompt(self.clone()).await
+        #[cfg(feature = "async")]
+        pub async fn complete_prompt(self, client: &Client) -> super::Result<Completion> {
+            client.complete_prompt(self).await
+        }
+
+        #[cfg(feature = "sync")]
+        pub fn complete_prompt_sync(self, client: &Client) -> super::Result<Completion> {
+            client.complete_prompt_sync(self)
         }
     }
 
@@ -127,8 +133,14 @@ pub mod api {
         /// # Errors
         /// `Error::BadArguments` if the arguments to complete are not valid
         /// `Error::APIError` if the api returns an error
-        pub async fn complete(&self, client: &Client) -> super::Result<Completion> {
+        #[cfg(feature = "async")]
+        pub async fn complete_prompt(&self, client: &Client) -> super::Result<Completion> {
             client.complete_prompt(self.build()?).await
+        }
+
+        #[cfg(feature = "sync")]
+        pub fn complete_prompt_sync(&self, client: &Client) -> super::Result<Completion> {
+            client.complete_prompt_sync(self.build()?)
         }
     }
 
@@ -352,15 +364,38 @@ impl Client {
 
     /// Private helper for making gets
     #[cfg(feature = "async")]
-    async fn get<T: serde::de::DeserializeOwned>(&self, endpoint: &str) -> Result<T> {
+    async fn get<T>(&self, endpoint: &str) -> Result<T>
+    where
+        T: serde::de::DeserializeOwned,
+    {
         let mut response = self.async_client.get(endpoint).await?;
         if let surf::StatusCode::Ok = response.status() {
             Ok(response.body_json::<T>().await?)
         } else {
-            {
-                let err = response.body_json::<api::ErrorWrapper>().await?.error;
-                Err(Error::APIError(err))
-            }
+            let err = response.body_json::<api::ErrorWrapper>().await?.error;
+            Err(Error::APIError(err))
+        }
+    }
+
+    #[cfg(feature = "sync")]
+    fn get_sync<T>(&self, endpoint: &str) -> Result<T>
+    where
+        T: serde::de::DeserializeOwned,
+    {
+        let response = self
+            .sync_client
+            .get(&format!("{}/{}", self.base_url, endpoint))
+            .call();
+        if let 200 = response.status() {
+            Ok(response
+                .into_json_deserialize()
+                .expect("Bug: client couldn't deserialize api response"))
+        } else {
+            let err = response
+                .into_json_deserialize::<api::ErrorWrapper>()
+                .expect("Bug: client couldn't deserialize api error response")
+                .error;
+            Err(Error::APIError(err))
         }
     }
 
@@ -375,6 +410,17 @@ impl Client {
         self.get("engines").await.map(|r: api::Container<_>| r.data)
     }
 
+    /// Lists the currently available engines.
+    ///
+    /// Provides basic information about each one such as the owner and availability.
+    ///
+    /// # Errors
+    /// - `Error::APIError` if the server returns an error
+    #[cfg(feature = "sync")]
+    pub fn engines_sync(&self) -> Result<Vec<api::EngineInfo>> {
+        self.get_sync("engines").map(|r: api::Container<_>| r.data)
+    }
+
     /// Retrieves an engine instance
     ///
     /// Provides basic information about the engine such as the owner and availability.
@@ -384,6 +430,11 @@ impl Client {
     #[cfg(feature = "async")]
     pub async fn engine(&self, engine: api::Engine) -> Result<api::EngineInfo> {
         self.get(&format!("engines/{}", engine)).await
+    }
+
+    #[cfg(feature = "sync")]
+    pub fn engine_sync(&self, engine: api::Engine) -> Result<api::EngineInfo> {
+        self.get_sync(&format!("engines/{}", engine))
     }
 
     // Private helper to generate post requests. Needs to be a bit more flexible than
@@ -421,16 +472,16 @@ impl Client {
             .sync_client
             .post(&format!("{}{}", self.base_url, endpoint))
             .send_json(
-                serde_json::to_value(body).expect("Bug: all types should serialize correctly"),
+                serde_json::to_value(body).expect("Bug: client couldn't serialize its own type"),
             );
         match response.status() {
             200 => Ok(response
                 .into_json_deserialize()
-                .expect("Bug: client failed to deserializing api response")),
+                .expect("Bug: client couldn't deserialize api response")),
             _ => Err(Error::APIError(
                 response
                     .into_json_deserialize::<api::ErrorWrapper>()
-                    .expect("Bug: client failed to deserialized api error document")
+                    .expect("Bug: client couldn't deserialize api error response")
                     .error,
             )),
         }
@@ -465,10 +516,41 @@ impl Client {
     }
 }
 
+// TODO: add a macro to de-boilerplate the sync and async tests
+
+#[allow(unused_macros)]
+macro_rules! async_test {
+    ($test_name: ident, $test_body: block) => {
+        #[cfg(feature = "async")]
+        #[tokio::test]
+        async fn $test_name() -> crate::Result<()> {
+            $test_body;
+            Ok(())
+        }
+    };
+}
+
+#[allow(unused_macros)]
+macro_rules! sync_test {
+    ($test_name: ident, $test_body: expr) => {
+        #[cfg(feature = "sync")]
+        #[test]
+        fn $test_name() -> crate::Result<()> {
+            $test_body;
+            Ok(())
+        }
+    };
+}
+
 #[cfg(test)]
 mod unit {
 
-    use crate::{api, Client, Error};
+    use mockito::Mock;
+
+    use crate::{
+        api::{self, Completion, CompletionArgs, Engine, EngineInfo},
+        Client, Error,
+    };
 
     fn mocked_client() -> Client {
         let _ = env_logger::builder().is_test(true).try_init();
@@ -500,10 +582,8 @@ mod unit {
         Ok(())
     }
 
-    #[tokio::test]
-    async fn parse_engines() -> crate::Result<()> {
-        use api::{Engine, EngineInfo};
-        let _m = mockito::mock("GET", "/engines")
+    fn mock_engines() -> (Mock, Vec<EngineInfo>) {
+        let mock = mockito::mock("GET", "/engines")
             .with_status(200)
             .with_header("content-type", "application/json")
             .with_body(
@@ -550,6 +630,7 @@ mod unit {
           }"#,
             )
             .create();
+
         let expected = vec![
             EngineInfo {
                 id: Engine::Ada,
@@ -582,40 +663,59 @@ mod unit {
                 ready: true,
             },
         ];
-        let response = mocked_client().engines().await?;
-        assert_eq!(response, expected);
-        Ok(())
+        (mock, expected)
     }
 
-    #[tokio::test]
-    async fn engine_error_response() -> crate::Result<()> {
-        let _m = mockito::mock("GET", "/engines/davinci")
+    async_test!(parse_engines_async, {
+        let (_m, expected) = mock_engines();
+        let response = mocked_client().engines().await?;
+        assert_eq!(response, expected);
+    });
+
+    sync_test!(parse_engines_sync, {
+        let (_m, expected) = mock_engines();
+        let response = mocked_client().engines_sync()?;
+        assert_eq!(response, expected);
+    });
+
+    fn mock_engine() -> (Mock, api::ErrorMessage) {
+        let mock = mockito::mock("GET", "/engines/davinci")
             .with_status(404)
             .with_header("content-type", "application/json")
             .with_body(
                 r#"{
-                    "error": {
-                        "code": null,
-                        "message": "Some kind of error happened",
-                        "type": "some_error_type"
-                    }
-                }"#,
+                "error": {
+                    "code": null,
+                    "message": "Some kind of error happened",
+                    "type": "some_error_type"
+                }
+            }"#,
             )
             .create();
         let expected = api::ErrorMessage {
             message: "Some kind of error happened".into(),
             error_type: "some_error_type".into(),
         };
+        (mock, expected)
+    }
+
+    async_test!(engine_error_response_async, {
+        let (_m, expected) = mock_engine();
         let response = mocked_client().engine(api::Engine::Davinci).await;
         if let Result::Err(Error::APIError(msg)) = response {
             assert_eq!(expected, msg);
         }
-        Ok(())
-    }
+    });
 
-    #[tokio::test]
-    async fn completion_args() -> crate::Result<()> {
-        let _m = mockito::mock("POST", "/engines/davinci/completions")
+    sync_test!(engine_error_response_sync, {
+        let (_m, expected) = mock_engine();
+        let response = mocked_client().engine_sync(api::Engine::Davinci);
+        if let Result::Err(Error::APIError(msg)) = response {
+            assert_eq!(expected, msg);
+        }
+    });
+    fn mock_completion() -> crate::Result<(Mock, CompletionArgs, Completion)> {
+        let mock = mockito::mock("POST", "/engines/davinci/completions")
             .with_status(200)
             .with_header("content-type", "application/json")
             .with_body(
@@ -635,6 +735,15 @@ mod unit {
                 }"#,
             )
             .create();
+        let args = api::CompletionArgs::builder()
+            .engine(api::Engine::Davinci)
+            .prompt("Once upon a time")
+            .max_tokens(5)
+            .temperature(1.0)
+            .top_p(1.0)
+            .n(1)
+            .stop(vec!["\n".into()])
+            .build()?;
         let expected = api::Completion {
             id: "cmpl-uqkvlQyYK7bGYrRHQ0eXlWi7".into(),
             created: 1589478378,
@@ -646,27 +755,42 @@ mod unit {
                 finish_reason: api::FinishReason::MaxTokensReached,
             }],
         };
-        let args = api::CompletionArgs::builder()
-            .engine(api::Engine::Davinci)
-            .prompt("Once upon a time")
-            .max_tokens(5)
-            .temperature(1.0)
-            .top_p(1.0)
-            .n(1)
-            .stop(vec!["\n".into()])
-            .build()?;
-        let response = mocked_client().complete_prompt(args).await?;
-        assert_eq!(response.model, expected.model);
-        assert_eq!(response.id, expected.id);
-        assert_eq!(response.created, expected.created);
-        let (resp_choice, expected_choice) = (&response.choices[0], &expected.choices[0]);
-        assert_eq!(resp_choice.text, expected_choice.text);
-        assert_eq!(resp_choice.index, expected_choice.index);
-        assert!(resp_choice.logprobs.is_none());
-        assert_eq!(resp_choice.finish_reason, expected_choice.finish_reason);
-
-        Ok(())
+        Ok((mock, args, expected))
     }
+
+    // Defines boilerplate here. The Completion can't derive Eq since it contains
+    // floats in various places.
+    fn assert_completion_equal(a: Completion, b: Completion) {
+        assert_eq!(a.model, b.model);
+        assert_eq!(a.id, b.id);
+        assert_eq!(a.created, b.created);
+        let (a_choice, b_choice) = (&a.choices[0], &b.choices[0]);
+        assert_eq!(a_choice.text, b_choice.text);
+        assert_eq!(a_choice.index, b_choice.index);
+        assert!(a_choice.logprobs.is_none());
+        assert_eq!(a_choice.finish_reason, b_choice.finish_reason);
+    }
+
+    async_test!(completion_args_async, {
+        let (_m, args, expected) = mock_completion()?;
+        let response = mocked_client().complete_prompt(args).await?;
+        assert_completion_equal(response, expected)
+    });
+
+    sync_test!(completion_args_sync, {
+        let (m, args, expected) = mock_completion()?;
+        let response = mocked_client().complete_prompt_sync(args)?;
+        let (a, b) = (response, expected);
+        assert_eq!(a.model, b.model);
+        assert_eq!(a.id, b.id);
+        assert_eq!(a.created, b.created);
+        let (a_choice, b_choice) = (&a.choices[0], &b.choices[0]);
+        assert_eq!(a_choice.text, b_choice.text);
+        assert_eq!(a_choice.index, b_choice.index);
+        assert!(a_choice.logprobs.is_none());
+        assert_eq!(a_choice.finish_reason, b_choice.finish_reason);
+        m.assert()
+    });
 }
 #[cfg(test)]
 mod integration {
@@ -683,14 +807,12 @@ mod integration {
         Client::new(&sk)
     }
 
-    #[tokio::test]
-    async fn can_get_engines() {
+    async_test!(can_get_engines, {
         let client = get_client();
-        client.engines().await.unwrap();
-    }
+        client.engines().await?
+    });
 
-    #[tokio::test]
-    async fn can_get_engine() {
+    async_test!(can_get_engine, {
         let client = get_client();
         let result = client.engine(api::Engine::Ada).await;
         match result {
@@ -705,18 +827,14 @@ mod integration {
                 panic!("Expected an error message, got {:?}", result)
             }
         }
-    }
+    });
 
-    #[tokio::test]
-    async fn complete_string() -> crate::Result<()> {
+    async_test!(complete_string, {
         let client = get_client();
         client.complete_prompt("Hey there").await?;
-        Ok(())
-    }
+    });
 
-    #[cfg(feature = "async")]
-    #[tokio::test]
-    async fn complete_explicit_params() -> crate::Result<()> {
+    async_test!(complete_explicit_params, {
         let client = get_client();
         let args = api::CompletionArgsBuilder::default()
             .prompt("Once upon a time,")
@@ -736,11 +854,9 @@ mod integration {
             .build()
             .expect("Build should have succeeded");
         client.complete_prompt(args).await?;
-        Ok(())
-    }
+    });
 
-    #[tokio::test]
-    async fn complete_stop_condition() -> crate::Result<()> {
+    async_test!(complete_stop_condition, {
         let client = get_client();
         let mut args = api::CompletionArgs::builder();
         let completion = args
@@ -754,12 +870,11 @@ A:"#,
             .top_p(0.0)
             .max_tokens(100)
             .stop(vec!["#".into(), "\n".into()])
-            .complete(&client)
+            .complete_prompt(&client)
             .await?;
         assert_eq!(
             completion.choices[0].finish_reason,
             api::FinishReason::StopSequenceReached
         );
-        Ok(())
-    }
+    });
 }
