@@ -754,8 +754,12 @@ A:"#,
             .top_p(0.0)
             .max_tokens(100)
             .stop(vec!["#".into(), "\n".into()])
-            .complete(&client).await?;
-        assert_eq!(completion.choices[0].finish_reason, api::FinishReason::StopSequenceReached);
+            .complete(&client)
+            .await?;
+        assert_eq!(
+            completion.choices[0].finish_reason,
+            api::FinishReason::StopSequenceReached
+        );
         Ok(())
     }
 }
