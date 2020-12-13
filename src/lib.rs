@@ -4,14 +4,14 @@ extern crate derive_builder;
 
 use thiserror::Error;
 
-type Result<T> = std::result::Result<T, OpenAIError>;
+type Result<T> = std::result::Result<T, Error>;
 
 #[allow(clippy::default_trait_access)]
 pub mod api {
     //! Data types corresponding to requests and responses from the API
-    use std::collections::HashMap;
+    use std::{collections::HashMap, fmt::Display};
 
-    use super::OpenAIClient;
+    use super::Client;
     use serde::{Deserialize, Serialize};
 
     /// Container type. Used in the api, but not useful for clients of this library
@@ -115,9 +115,9 @@ pub mod api {
         /// Request a completion from the api
         ///
         /// # Errors
-        /// `OpenAIError::APIError` if the api returns an error
-        pub async fn complete(&self, client: &OpenAIClient) -> super::Result<Completion> {
-            client.complete(self.clone()).await
+        /// `Error::APIError` if the api returns an error
+        pub async fn complete(&self, client: &Client) -> super::Result<Completion> {
+            client.complete_prompt(self.clone()).await
         }
     }
 
@@ -125,10 +125,10 @@ pub mod api {
         /// Request a completion from the api
         ///
         /// # Errors
-        /// `OpenAIError::BadArguments` if the arguments to complete are not valid
-        /// `OpenAIError::APIError` if the api returns an error
-        pub async fn complete(&self, client: &OpenAIClient) -> super::Result<Completion> {
-            client.complete(self.build()?).await
+        /// `Error::BadArguments` if the arguments to complete are not valid
+        /// `Error::APIError` if the api returns an error
+        pub async fn complete(&self, client: &Client) -> super::Result<Completion> {
+            client.complete_prompt(self.build()?).await
         }
     }
 
@@ -198,48 +198,61 @@ pub mod api {
         pub error_type: String,
     }
 
+    impl Display for ErrorMessage {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            self.message.fmt(f)
+        }
+    }
+
     /// API-level wrapper used in deserialization
     #[derive(Deserialize, Debug)]
-    pub(super) struct ErrorWrapper {
+    pub(crate) struct ErrorWrapper {
         pub error: ErrorMessage,
     }
 }
 
 /// This library's main `Error` type.
 #[derive(Error, Debug)]
-pub enum OpenAIError {
+pub enum Error {
     /// An error returned by the API itself
-    #[error("API Returned an Error document")]
+    #[error("API returned an Error: {}", .0.message)]
     APIError(api::ErrorMessage),
     /// An error the client discovers before talking to the API
-    #[error("Bad arguments")]
+    #[error("Bad arguments: {0}")]
     BadArguments(String),
     /// Network / protocol related errors
-    #[error("Error at the protocol level")]
-    ProtocolError(surf::Error),
+    #[cfg(feature = "async")]
+    #[error("Error at the protocol level: {0}")]
+    AsyncProtocolError(surf::Error),
+    #[cfg(feature = "sync")]
+    #[error("Error at the protocol level, sync client")]
+    SyncProtocolError(ureq::Error),
 }
 
-impl From<api::ErrorMessage> for OpenAIError {
+impl From<api::ErrorMessage> for Error {
     fn from(e: api::ErrorMessage) -> Self {
-        OpenAIError::APIError(e)
+        Error::APIError(e)
     }
 }
 
-impl From<String> for OpenAIError {
+impl From<String> for Error {
     fn from(e: String) -> Self {
-        OpenAIError::BadArguments(e)
+        Error::BadArguments(e)
     }
 }
 
-impl From<surf::Error> for OpenAIError {
+#[cfg(feature = "async")]
+impl From<surf::Error> for Error {
     fn from(e: surf::Error) -> Self {
-        OpenAIError::ProtocolError(e)
+        Error::AsyncProtocolError(e)
     }
 }
 
-/// Client object. Must be constructed to talk to the API.
-pub struct OpenAIClient {
-    client: surf::Client,
+#[cfg(feature = "sync")]
+impl From<ureq::Error> for Error {
+    fn from(e: ureq::Error) -> Self {
+        Error::SyncProtocolError(e)
+    }
 }
 
 /// Authentication middleware
@@ -266,6 +279,7 @@ impl BearerToken {
     }
 }
 
+#[cfg(feature = "async")]
 #[surf::utils::async_trait]
 impl surf::middleware::Middleware for BearerToken {
     async fn handle(
@@ -276,39 +290,75 @@ impl surf::middleware::Middleware for BearerToken {
     ) -> surf::Result<surf::Response> {
         log::debug!("Request: {:?}", req);
         req.insert_header("Authorization", format!("Bearer {}", self.token));
-        let response = next.run(req, client).await?;
+        let response: surf::Response = next.run(req, client).await?;
         log::debug!("Response: {:?}", response);
         Ok(response)
     }
 }
 
-impl OpenAIClient {
-    /// Creates a new `OpenAIClient` given an api token
+#[cfg(feature = "async")]
+fn async_client(token: &str, base_url: &str) -> surf::Client {
+    let mut async_client = surf::client();
+    async_client.set_base_url(surf::Url::parse(base_url).expect("Static string should parse"));
+    async_client.with(BearerToken::new(token))
+}
+
+#[cfg(feature = "sync")]
+fn sync_client(token: &str) -> ureq::Agent {
+    ureq::agent().auth_kind("Bearer", token).build()
+}
+
+/// Client object. Must be constructed to talk to the API.
+pub struct Client {
+    #[cfg(feature = "async")]
+    async_client: surf::Client,
+    #[cfg(feature = "sync")]
+    sync_client: ureq::Agent,
+    #[cfg(feature = "sync")]
+    base_url: String,
+}
+
+impl Client {
+    // Creates a new `Client` given an api token
     #[must_use]
     pub fn new(token: &str) -> Self {
-        let mut client = surf::client();
-        client.set_base_url(
-            surf::Url::parse("https://api.openai.com/v1/").expect("Static string should parse"),
-        );
-        client = client.with(BearerToken::new(token));
-        Self { client }
+        let base_url = String::from("https://api.openai.com/v1/");
+        Self {
+            #[cfg(feature = "async")]
+            async_client: async_client(token, &base_url),
+            #[cfg(feature = "sync")]
+            sync_client: sync_client(token),
+            #[cfg(feature = "sync")]
+            base_url,
+        }
     }
 
-    /// Allow setting the api root in the tests
+    // Allow setting the api root in the tests
     #[cfg(test)]
-    fn set_api_root(&mut self, url: surf::Url) {
-        self.client.set_base_url(url);
+    fn set_api_root(mut self, base_url: &str) -> Self {
+        #[cfg(feature = "async")]
+        {
+            self.async_client.set_base_url(
+                surf::Url::parse(base_url).expect("static URL expected to parse correctly"),
+            );
+        }
+        #[cfg(feature = "sync")]
+        {
+            self.base_url = String::from(base_url);
+        }
+        self
     }
 
     /// Private helper for making gets
+    #[cfg(feature = "async")]
     async fn get<T: serde::de::DeserializeOwned>(&self, endpoint: &str) -> Result<T> {
-        let mut response = self.client.get(endpoint).await?;
+        let mut response = self.async_client.get(endpoint).await?;
         if let surf::StatusCode::Ok = response.status() {
             Ok(response.body_json::<T>().await?)
         } else {
             {
                 let err = response.body_json::<api::ErrorWrapper>().await?.error;
-                Err(OpenAIError::APIError(err))
+                Err(Error::APIError(err))
             }
         }
     }
@@ -318,35 +368,39 @@ impl OpenAIClient {
     /// Provides basic information about each one such as the owner and availability.
     ///
     /// # Errors
-    /// - `OpenAIError::APIError` if the server returns an error
+    /// - `Error::APIError` if the server returns an error
+    #[cfg(feature = "async")]
     pub async fn engines(&self) -> Result<Vec<api::EngineInfo>> {
         self.get("engines").await.map(|r: api::Container<_>| r.data)
     }
 
     /// Retrieves an engine instance
+    ///
     /// Provides basic information about the engine such as the owner and availability.
     ///
     /// # Errors
-    /// - `OpenAIError::APIError` if the server returns an error
+    /// - `Error::APIError` if the server returns an error
+    #[cfg(feature = "async")]
     pub async fn engine(&self, engine: api::Engine) -> Result<api::EngineInfo> {
         self.get(&format!("engines/{}", engine)).await
     }
 
     // Private helper to generate post requests. Needs to be a bit more flexible than
     // get because it should support SSE eventually
+    #[cfg(feature = "async")]
     async fn post<B, R>(&self, endpoint: &str, body: B) -> Result<R>
     where
         B: serde::ser::Serialize,
         R: serde::de::DeserializeOwned,
     {
         let mut response = self
-            .client
+            .async_client
             .post(endpoint)
             .body(surf::Body::from_json(&body)?)
             .await?;
         match response.status() {
             surf::StatusCode::Ok => Ok(response.body_json::<R>().await?),
-            _ => Err(OpenAIError::APIError(
+            _ => Err(Error::APIError(
                 response
                     .body_json::<api::ErrorWrapper>()
                     .await
@@ -355,11 +409,38 @@ impl OpenAIClient {
             )),
         }
     }
+
+    #[cfg(feature = "sync")]
+    fn post_sync<B, R>(&self, endpoint: &str, body: B) -> Result<R>
+    where
+        B: serde::ser::Serialize,
+        R: serde::de::DeserializeOwned,
+    {
+        let response = self
+            .sync_client
+            .post(&format!("{}{}", self.base_url, endpoint))
+            .send_json(
+                serde_json::to_value(body).expect("Bug: all types should serialize correctly"),
+            );
+        match response.status() {
+            200 => Ok(response
+                .into_json_deserialize()
+                .expect("Bug: client failed to deserializing api response")),
+            _ => Err(Error::APIError(
+                response
+                    .into_json_deserialize::<api::ErrorWrapper>()
+                    .expect("Bug: client failed to deserialized api error document")
+                    .error,
+            )),
+        }
+    }
+
     /// Get predicted completion of the prompt
     ///
     /// # Errors
-    ///  - `OpenAIError::APIError` if the api returns an error
-    pub async fn complete(
+    ///  - `Error::APIError` if the api returns an error
+    #[cfg(feature = "async")]
+    pub async fn complete_prompt(
         &self,
         prompt: impl Into<api::CompletionArgs>,
     ) -> Result<api::Completion> {
@@ -368,20 +449,29 @@ impl OpenAIClient {
             .post(&format!("engines/{}/completions", args.engine), args)
             .await?)
     }
+
+    /// Get predicted completion of the prompt synchronously
+    ///
+    /// # Error
+    /// - `Error::APIError` if the api returns an error
+    #[cfg(feature = "sync")]
+    pub fn complete_prompt_sync(
+        &self,
+        prompt: impl Into<api::CompletionArgs>,
+    ) -> Result<api::Completion> {
+        let args = prompt.into();
+        self.post_sync(&format!("engines/{}/completions", args.engine), args)
+    }
 }
 
 #[cfg(test)]
 mod unit {
 
-    use crate::{api, OpenAIClient, OpenAIError};
+    use crate::{api, Client, Error};
 
-    fn mocked_client() -> OpenAIClient {
+    fn mocked_client() -> Client {
         let _ = env_logger::builder().is_test(true).try_init();
-        let mut client = OpenAIClient::new("bogus");
-        client.set_api_root(
-            surf::Url::parse(&mockito::server_url()).expect("mockito url didn't parse"),
-        );
-        client
+        Client::new("bogus").set_api_root(&mockito::server_url())
     }
 
     #[test]
@@ -516,7 +606,7 @@ mod unit {
             error_type: "some_error_type".into(),
         };
         let response = mocked_client().engine(api::Engine::Davinci).await;
-        if let Result::Err(OpenAIError::APIError(msg)) = response {
+        if let Result::Err(Error::APIError(msg)) = response {
             assert_eq!(expected, msg);
         }
         Ok(())
@@ -527,14 +617,14 @@ mod integration {
 
     use api::ErrorMessage;
 
-    use crate::{api, OpenAIClient, OpenAIError};
+    use crate::{api, Client, Error};
     /// Used by tests to get a client to the actual api
-    fn get_client() -> OpenAIClient {
+    fn get_client() -> Client {
         let _ = env_logger::builder().is_test(true).try_init();
         let sk = std::env::var("OPENAI_SK").expect(
             "To run integration tests, you must put set the OPENAI_SK env var to your api token",
         );
-        OpenAIClient::new(&sk)
+        Client::new(&sk)
     }
 
     #[tokio::test]
@@ -542,12 +632,13 @@ mod integration {
         let client = get_client();
         client.engines().await.unwrap();
     }
+
     #[tokio::test]
     async fn can_get_engine() {
         let client = get_client();
         let result = client.engine(api::Engine::Ada).await;
         match result {
-            Err(OpenAIError::APIError(ErrorMessage {
+            Err(Error::APIError(ErrorMessage {
                 message,
                 error_type,
             })) => {
@@ -563,10 +654,11 @@ mod integration {
     #[tokio::test]
     async fn complete_string() -> crate::Result<()> {
         let client = get_client();
-        client.complete("Hey there").await?;
+        client.complete_prompt("Hey there").await?;
         Ok(())
     }
 
+    #[cfg(feature = "async")]
     #[tokio::test]
     async fn complete_explicit_params() -> crate::Result<()> {
         let client = get_client();
@@ -587,7 +679,7 @@ mod integration {
             })
             .build()
             .expect("Build should have succeeded");
-        client.complete(args).await?;
+        client.complete_prompt(args).await?;
         Ok(())
     }
 }
