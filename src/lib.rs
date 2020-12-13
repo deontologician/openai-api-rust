@@ -655,7 +655,7 @@ mod unit {
             .n(1)
             .stop(vec!["\n".into()])
             .build()?;
-        let response = mocked_client().complete(args).await?;
+        let response = mocked_client().complete_prompt(args).await?;
         assert_eq!(response.model, expected.model);
         assert_eq!(response.id, expected.id);
         assert_eq!(response.created, expected.created);

@@ -20,6 +20,12 @@ jobs:
       - uses: actions-rs/cargo@v1
         with:
           command: check
+      - uses: actions-rs/cargo@v1
+        with:
+          command: check --features=sync --no-default-features
+      - uses: actions-rs/cargo@v1
+        with:
+          command: check --features=async --no-default-features
 
   test:
     name: Test Suite
