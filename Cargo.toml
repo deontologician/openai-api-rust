@@ -11,22 +11,25 @@ keywords = ["openai", "gpt3"]
 categories = ["api-bindings", "asynchronous"]
 
 [features]
-default = ["hyper"]
-
-hyper = ["surf/hyper-client"]
-curl = ["surf/curl-client"]
-h1 = ["surf/h1-client"]
+default = ["sync", "async"]
+sync = ["ureq"]
+async = ["surf/hyper-client"]
 
 [dependencies]
-surf = { version = "^2.1.0", default-features = false }
 thiserror = "^1.0.22"
 serde = { version = "^1.0.117", features = ["derive"] }
 derive_builder = "^0.9.0"
 log = "^0.4.11"
 
+# Used by sync feature
+ureq = { version = "^1.5.4", optional=true, features = ["json", "tls"] }
+serde_json = { version="^1.0"}
+# Used by async feature
+surf = { version = "^2.1.0", optional=true, default-features=false}
+
 [dev-dependencies]
 mockito = "0.28.0"
 maplit = "1.0.2"
 tokio = { version = "^0.2.5", features = ["full"]}
-serde_json = "^1.0"
 env_logger = "0.8.2"
+serde_json = "^1.0"

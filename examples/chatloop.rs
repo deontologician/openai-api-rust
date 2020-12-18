@@ -1,6 +1,6 @@
 use openai_api::{
     api::{CompletionArgs, Engine},
-    OpenAIClient,
+    Client,
 };
 
 const START_PROMPT: &str = "
@@ -11,7 +11,7 @@ AI: I am an AI. How can I help you today?";
 #[tokio::main]
 async fn main() {
     let api_token = std::env::var("OPENAI_SK").unwrap();
-    let client = OpenAIClient::new(&api_token);
+    let client = Client::new(&api_token);
     let mut context = String::from(START_PROMPT);
     let mut args = CompletionArgs::builder();
     args.engine(Engine::Davinci)
