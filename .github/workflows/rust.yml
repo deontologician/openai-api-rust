@@ -23,15 +23,11 @@ jobs:
       - uses: actions-rs/cargo@v1
         with:
           command: check
-          args:
-            - --features=sync
-            - --no-default-features
+          args: --features=sync --no-default-features
       - uses: actions-rs/cargo@v1
         with:
           command: check
-          args:
-            - --features=async
-            - --no-default-features
+          args: --features=async --no-default-features
 
   test:
     name: Test Suite
