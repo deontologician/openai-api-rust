@@ -269,10 +269,12 @@ impl From<ureq::Error> for Error {
 }
 
 /// Authentication middleware
+#[cfg(feature = "async")]
 struct BearerToken {
     token: String,
 }
 
+#[cfg(feature = "async")]
 impl std::fmt::Debug for BearerToken {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         // Get the first few characters to help debug, but not accidentally log key
@@ -284,6 +286,7 @@ impl std::fmt::Debug for BearerToken {
     }
 }
 
+#[cfg(feature = "async")]
 impl BearerToken {
     fn new(token: &str) -> Self {
         Self {
@@ -382,10 +385,10 @@ impl Client {
     where
         T: serde::de::DeserializeOwned,
     {
-        let response = self
+        let response = dbg!(self
             .sync_client
-            .get(&format!("{}/{}", self.base_url, endpoint))
-            .call();
+            .get(&format!("{}{}", self.base_url, endpoint)))
+        .call();
         if let 200 = response.status() {
             Ok(response
                 .into_json_deserialize()
@@ -554,7 +557,7 @@ mod unit {
 
     fn mocked_client() -> Client {
         let _ = env_logger::builder().is_test(true).try_init();
-        Client::new("bogus").set_api_root(&mockito::server_url())
+        Client::new("bogus").set_api_root(&format!("{}/", mockito::server_url()))
     }
 
     #[test]
@@ -734,6 +737,7 @@ mod unit {
                 ]
                 }"#,
             )
+            .expect(1)
             .create();
         let args = api::CompletionArgs::builder()
             .engine(api::Engine::Davinci)
@@ -772,32 +776,25 @@ mod unit {
     }
 
     async_test!(completion_args_async, {
-        let (_m, args, expected) = mock_completion()?;
+        let (m, args, expected) = mock_completion()?;
         let response = mocked_client().complete_prompt(args).await?;
-        assert_completion_equal(response, expected)
+        assert_completion_equal(response, expected);
+        m.assert();
     });
 
     sync_test!(completion_args_sync, {
         let (m, args, expected) = mock_completion()?;
         let response = mocked_client().complete_prompt_sync(args)?;
-        let (a, b) = (response, expected);
-        assert_eq!(a.model, b.model);
-        assert_eq!(a.id, b.id);
-        assert_eq!(a.created, b.created);
-        let (a_choice, b_choice) = (&a.choices[0], &b.choices[0]);
-        assert_eq!(a_choice.text, b_choice.text);
-        assert_eq!(a_choice.index, b_choice.index);
-        assert!(a_choice.logprobs.is_none());
-        assert_eq!(a_choice.finish_reason, b_choice.finish_reason);
-        m.assert()
+        assert_completion_equal(response, expected);
+        m.assert();
     });
 }
 #[cfg(test)]
 mod integration {
-
-    use api::ErrorMessage;
-
-    use crate::{api, Client, Error};
+    use crate::{
+        api::{self, Completion},
+        Client, Error,
+    };
     /// Used by tests to get a client to the actual api
     fn get_client() -> Client {
         let _ = env_logger::builder().is_test(true).try_init();
@@ -807,16 +804,30 @@ mod integration {
         Client::new(&sk)
     }
 
-    async_test!(can_get_engines, {
+    async_test!(can_get_engines_async, {
         let client = get_client();
         client.engines().await?
     });
 
-    async_test!(can_get_engine, {
+    sync_test!(can_get_engines_sync, {
         let client = get_client();
-        let result = client.engine(api::Engine::Ada).await;
+        let engines = client
+            .engines_sync()?
+            .into_iter()
+            .map(|ei| ei.id)
+            .collect::<Vec<_>>();
+        assert!(engines.contains(&api::Engine::Ada));
+        assert!(engines.contains(&api::Engine::Babbage));
+        assert!(engines.contains(&api::Engine::Curie));
+        assert!(engines.contains(&api::Engine::Davinci));
+    });
+
+    fn assert_expected_engine_failure<T>(result: Result<T, Error>)
+    where
+        T: std::fmt::Debug,
+    {
         match result {
-            Err(Error::APIError(ErrorMessage {
+            Err(Error::APIError(api::ErrorMessage {
                 message,
                 error_type,
             })) => {
@@ -827,16 +838,29 @@ mod integration {
                 panic!("Expected an error message, got {:?}", result)
             }
         }
+    }
+    async_test!(can_get_engine_async, {
+        let client = get_client();
+        assert_expected_engine_failure(client.engine(api::Engine::Ada).await);
     });
 
-    async_test!(complete_string, {
+    sync_test!(can_get_engine_sync, {
+        let client = get_client();
+        assert_expected_engine_failure(client.engine_sync(api::Engine::Ada));
+    });
+
+    async_test!(complete_string_async, {
         let client = get_client();
         client.complete_prompt("Hey there").await?;
     });
 
-    async_test!(complete_explicit_params, {
+    sync_test!(complete_string_sync, {
         let client = get_client();
-        let args = api::CompletionArgsBuilder::default()
+        client.complete_prompt_sync("Hey there")?;
+    });
+
+    fn create_args() -> api::CompletionArgs {
+        api::CompletionArgsBuilder::default()
             .prompt("Once upon a time,")
             .max_tokens(10)
             .temperature(0.5)
@@ -852,29 +876,52 @@ mod integration {
                 "23".into() => 0.0,
             })
             .build()
-            .expect("Build should have succeeded");
+            .expect("Bug: build should succeed")
+    }
+    async_test!(complete_explicit_params_async, {
+        let client = get_client();
+        let args = create_args();
         client.complete_prompt(args).await?;
     });
 
-    async_test!(complete_stop_condition, {
+    sync_test!(complete_explicit_params_sync, {
         let client = get_client();
+        let args = create_args();
+        client.complete_prompt_sync(args)?
+    });
+
+    fn stop_condition_args() -> api::CompletionArgs {
         let mut args = api::CompletionArgs::builder();
-        let completion = args
-            .prompt(
-                r#"
+        args.prompt(
+            r#"
 Q: Please type `#` now
 A:"#,
-            )
-            // turn temp & top_p way down to prevent test flakiness
-            .temperature(0.0)
-            .top_p(0.0)
-            .max_tokens(100)
-            .stop(vec!["#".into(), "\n".into()])
-            .complete_prompt(&client)
-            .await?;
+        )
+        // turn temp & top_p way down to prevent test flakiness
+        .temperature(0.0)
+        .top_p(0.0)
+        .max_tokens(100)
+        .stop(vec!["#".into(), "\n".into()])
+        .build()
+        .expect("Bug: build should succeed")
+    }
+
+    fn assert_completion_finish_reason(completion: Completion) {
         assert_eq!(
             completion.choices[0].finish_reason,
             api::FinishReason::StopSequenceReached
         );
+    }
+
+    async_test!(complete_stop_condition_async, {
+        let client = get_client();
+        let args = stop_condition_args();
+        assert_completion_finish_reason(client.complete_prompt(args).await?);
+    });
+
+    sync_test!(complete_stop_condition_sync, {
+        let client = get_client();
+        let args = stop_condition_args();
+        assert_completion_finish_reason(client.complete_prompt_sync(args)?);
     });
 }
