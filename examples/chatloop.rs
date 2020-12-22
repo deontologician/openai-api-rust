@@ -9,8 +9,8 @@ The assistant is helpful, creative, clever, and very friendly.
 Human: Hello, who are you?
 AI: I am an AI. How can I help you today?";
 #[tokio::main]
-async fn main() {
-    let api_token = std::env::var("OPENAI_SK").unwrap();
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let api_token = std::env::var("OPENAI_SK")?;
     let client = Client::new(&api_token);
     let mut context = String::from(START_PROMPT);
     let mut args = CompletionArgs::builder();
@@ -28,7 +28,7 @@ async fn main() {
             break;
         }
         context.push_str("\nAI:");
-        match args.prompt(context.as_str()).complete(&client).await {
+        match args.prompt(context.as_str()).complete_prompt(&client).await {
             Ok(completion) => {
                 println!("\x1b[1;36m{}\x1b[1;0m", completion);
                 context.push_str(&completion.choices[0].text);
@@ -40,4 +40,5 @@ async fn main() {
         }
     }
     println!("Full conversation:\n{}", context);
+    Ok(())
 }

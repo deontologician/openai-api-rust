@@ -16,18 +16,17 @@ $ cargo add openai-api
 # Quickstart
 
 ```rust
-use openai_api::OpenAIClient;
-
 #[tokio::main]
-async fn main() {
-    let api_token = std::env::var("OPENAI_SK").unwrap();
-    let client = OpenAIClient::new(&api_token);
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let api_token = std::env::var("OPENAI_SK")?;
+    let client = openai_api::Client::new(&api_token);
     let prompt = String::from("Once upon a time,");
     println!(
         "{}{}",
         prompt,
-        client.complete(prompt.as_str()).await.unwrap()
+        client.complete(prompt.as_str()).await?
     );
+    Ok(())
 }
 ```
 # Basic Usage
@@ -37,7 +36,7 @@ async fn main() {
 For simple demos and debugging, you can do a completion and use the `Display` instance of a `Completion` object to convert it to a string:
 
 ```rust
-let response = client.complete("Once upon a time").await?;
+let response = client.complete_prompt("Once upon a time").await?;
 println!("{}", response);
 ```
 
@@ -51,7 +50,7 @@ let args = openai_api::api::CompletionArgs::builder()
         .temperature(0.7)
         .top_p(0.9)
         .stop(vec!["\n".into()]);
-let response = args.complete(&client).await?;
+let completion = client.complete_prompt(args).await?;
 println!("Response: {}", response.choices[0].text);
 println!("Model used: {}", response.model);
 ```
