@@ -21,7 +21,7 @@ pub mod api {
     }
 
     /// Engine description type
-    #[derive(Deserialize, Debug, Eq, PartialEq)]
+    #[derive(Deserialize, Debug, Eq, PartialEq, Clone)]
     pub struct EngineInfo {
         pub id: Engine,
         pub owner: String,
@@ -145,7 +145,7 @@ pub mod api {
     }
 
     /// Represents a non-streamed completion response
-    #[derive(Deserialize, Debug)]
+    #[derive(Deserialize, Debug, Clone)]
     pub struct Completion {
         /// Completion unique identifier
         pub id: String,
@@ -164,7 +164,7 @@ pub mod api {
     }
 
     /// A single completion result
-    #[derive(Deserialize, Debug)]
+    #[derive(Deserialize, Debug, Clone)]
     pub struct Choice {
         /// The text of the completion. Will contain the prompt if echo is True.
         pub text: String,
@@ -183,7 +183,7 @@ pub mod api {
     }
 
     /// Represents a logprobs subdocument
-    #[derive(Deserialize, Debug)]
+    #[derive(Deserialize, Debug, Clone)]
     pub struct LogProbs {
         pub tokens: Vec<String>,
         pub token_logprobs: Vec<Option<f64>>,
@@ -192,7 +192,7 @@ pub mod api {
     }
 
     /// Reason a prompt completion finished.
-    #[derive(Deserialize, Debug, Eq, PartialEq)]
+    #[derive(Deserialize, Debug, Eq, PartialEq, Clone, Copy)]
     #[non_exhaustive]
     pub enum FinishReason {
         /// The maximum length was reached
@@ -204,7 +204,7 @@ pub mod api {
     }
 
     /// Error response object from the server
-    #[derive(Deserialize, Debug, Eq, PartialEq)]
+    #[derive(Deserialize, Debug, Eq, PartialEq, Clone)]
     pub struct ErrorMessage {
         pub message: String,
         #[serde(rename = "type")]
