@@ -1,6 +1,6 @@
 [package]
 name = "openai-api"
-version = "0.1.4"
+version = "0.1.5-alpha.0"
 authors = ["Josh Kuhn <deontologician@gmail.com>"]
 license-file = "LICENSE"
 edition = "2018"
