@@ -196,7 +196,7 @@ pub mod api {
     #[non_exhaustive]
     pub enum FinishReason {
         /// The maximum length was reached
-        #[serde(rename = "max_tokens")]
+        #[serde(rename = "length")]
         MaxTokensReached,
         /// The stop token was encountered
         #[serde(rename = "stop")]
@@ -325,6 +325,7 @@ fn sync_client(token: &str) -> ureq::Agent {
 }
 
 /// Client object. Must be constructed to talk to the API.
+#[derive(Debug, Clone)]
 pub struct Client {
     #[cfg(feature = "async")]
     async_client: surf::Client,
@@ -732,7 +733,7 @@ mod unit {
                     "text": " there was a girl who",
                     "index": 0,
                     "logprobs": null,
-                    "finish_reason": "max_tokens"
+                    "finish_reason": "length"
                     }
                 ]
                 }"#,

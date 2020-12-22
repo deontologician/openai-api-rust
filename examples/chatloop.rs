@@ -28,7 +28,7 @@ async fn main() {
             break;
         }
         context.push_str("\nAI:");
-        match args.prompt(context.as_str()).complete(&client).await {
+        match args.prompt(context.as_str()).complete_prompt(&client).await {
             Ok(completion) => {
                 println!("\x1b[1;36m{}\x1b[1;0m", completion);
                 context.push_str(&completion.choices[0].text);
