@@ -862,10 +862,7 @@ A:"#,
     }
 
     fn assert_completion_finish_reason(completion: Completion) {
-        assert_eq!(
-            completion.choices[0].finish_reason,
-            "stop",
-        );
+        assert_eq!(completion.choices[0].finish_reason, "stop",);
     }
 
     async_test!(complete_stop_condition_async, {
