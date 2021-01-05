@@ -1,7 +1,4 @@
-use openai_api::{
-    api::{CompletionArgs, Engine},
-    Client,
-};
+use openai_api::{api::CompletionArgs, Client};
 
 const START_PROMPT: &str = "
 The following is a conversation with an AI assistant.
@@ -14,7 +11,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let client = Client::new(&api_token);
     let mut context = String::from(START_PROMPT);
     let mut args = CompletionArgs::builder();
-    args.engine(Engine::Davinci)
+    args.engine("davinci")
         .max_tokens(45)
         .stop(vec!["\n".into()])
         .top_p(0.5)
@@ -27,7 +24,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             eprintln!("Error: {}", e);
             break;
         }
-        context.push_str("\nAI:");
+        context.push_str("\nAI: ");
         match args.prompt(context.as_str()).complete_prompt(&client).await {
             Ok(completion) => {
                 println!("\x1b[1;36m{}\x1b[1;0m", completion);
