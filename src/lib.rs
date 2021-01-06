@@ -11,7 +11,6 @@ pub mod api {
     //! Data types corresponding to requests and responses from the API
     use std::{collections::HashMap, fmt::Display};
 
-    use super::Client;
     use serde::{Deserialize, Serialize};
 
     /// Container type. Used in the api, but not useful for clients of this library
@@ -30,6 +29,7 @@ pub mod api {
 
     /// Options that affect the result
     #[derive(Serialize, Debug, Builder, Clone)]
+    #[builder(pattern = "immutable")]
     pub struct CompletionArgs {
         #[builder(setter(into), default = "\"<|endoftext|>\".into()")]
         prompt: String,
@@ -76,37 +76,6 @@ pub mod api {
         #[must_use]
         pub fn builder() -> CompletionArgsBuilder {
             CompletionArgsBuilder::default()
-        }
-
-        /// Request a completion from the api
-        ///
-        /// # Errors
-        /// `Error::APIError` if the api returns an error
-        #[cfg(feature = "async")]
-        pub async fn complete_prompt(self, client: &Client) -> super::Result<Completion> {
-            client.complete_prompt(self).await
-        }
-
-        #[cfg(feature = "sync")]
-        pub fn complete_prompt_sync(self, client: &Client) -> super::Result<Completion> {
-            client.complete_prompt_sync(self)
-        }
-    }
-
-    impl CompletionArgsBuilder {
-        /// Request a completion from the api
-        ///
-        /// # Errors
-        /// `Error::BadArguments` if the arguments to complete are not valid
-        /// `Error::APIError` if the api returns an error
-        #[cfg(feature = "async")]
-        pub async fn complete_prompt(&self, client: &Client) -> super::Result<Completion> {
-            client.complete_prompt(self.build()?).await
-        }
-
-        #[cfg(feature = "sync")]
-        pub fn complete_prompt_sync(&self, client: &Client) -> super::Result<Completion> {
-            client.complete_prompt_sync(self.build()?)
         }
     }
 
@@ -293,7 +262,7 @@ impl Client {
     // Creates a new `Client` given an api token
     #[must_use]
     pub fn new(token: &str) -> Self {
-        let base_url = String::from("https://api.openai.com/v1/");
+        let base_url: String = "https://api.openai.com/v1/".into();
         Self {
             #[cfg(feature = "async")]
             async_client: async_client(token, &base_url),
@@ -846,19 +815,19 @@ mod integration {
     });
 
     fn stop_condition_args() -> api::CompletionArgs {
-        let mut args = api::CompletionArgs::builder();
-        args.prompt(
-            r#"
+        api::CompletionArgs::builder()
+            .prompt(
+                r#"
 Q: Please type `#` now
 A:"#,
-        )
-        // turn temp & top_p way down to prevent test flakiness
-        .temperature(0.0)
-        .top_p(0.0)
-        .max_tokens(100)
-        .stop(vec!["#".into(), "\n".into()])
-        .build()
-        .expect("Bug: build should succeed")
+            )
+            // turn temp & top_p way down to prevent test flakiness
+            .temperature(0.0)
+            .top_p(0.0)
+            .max_tokens(100)
+            .stop(vec!["#".into(), "\n".into()])
+            .build()
+            .expect("Bug: build should succeed")
     }
 
     fn assert_completion_finish_reason(completion: Completion) {
