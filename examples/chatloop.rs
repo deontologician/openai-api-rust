@@ -10,8 +10,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let api_token = std::env::var("OPENAI_SK")?;
     let client = Client::new(&api_token);
     let mut context = String::from(START_PROMPT);
-    let mut args = CompletionArgs::builder();
-    args.engine("davinci")
+    let args = CompletionArgs::builder()
+        .engine("davinci")
         .max_tokens(45)
         .stop(vec!["\n".into()])
         .top_p(0.5)
@@ -25,7 +25,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             break;
         }
         context.push_str("\nAI: ");
-        match args.prompt(context.as_str()).complete_prompt(&client).await {
+        match client
+            .complete_prompt(args.prompt(context.as_str()).build()?)
+            .await
+        {
             Ok(completion) => {
                 println!("\x1b[1;36m{}\x1b[1;0m", completion);
                 context.push_str(&completion.choices[0].text);
