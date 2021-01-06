@@ -152,22 +152,22 @@ pub mod api {
 pub enum Error {
     /// An error returned by the API itself
     #[error("API returned an Error: {}", .0.message)]
-    APIError(api::ErrorMessage),
+    API(api::ErrorMessage),
     /// An error the client discovers before talking to the API
     #[error("Bad arguments: {0}")]
     BadArguments(String),
     /// Network / protocol related errors
     #[cfg(feature = "async")]
     #[error("Error at the protocol level: {0}")]
-    AsyncProtocolError(surf::Error),
+    AsyncProtocol(surf::Error),
     #[cfg(feature = "sync")]
     #[error("Error at the protocol level, sync client")]
-    SyncProtocolError(ureq::Error),
+    SyncProtocol(ureq::Error),
 }
 
 impl From<api::ErrorMessage> for Error {
     fn from(e: api::ErrorMessage) -> Self {
-        Error::APIError(e)
+        Error::API(e)
     }
 }
 
@@ -180,14 +180,14 @@ impl From<String> for Error {
 #[cfg(feature = "async")]
 impl From<surf::Error> for Error {
     fn from(e: surf::Error) -> Self {
-        Error::AsyncProtocolError(e)
+        Error::AsyncProtocol(e)
     }
 }
 
 #[cfg(feature = "sync")]
 impl From<ureq::Error> for Error {
     fn from(e: ureq::Error) -> Self {
-        Error::SyncProtocolError(e)
+        Error::SyncProtocol(e)
     }
 }
 
@@ -300,7 +300,7 @@ impl Client {
             Ok(response.body_json::<T>().await?)
         } else {
             let err = response.body_json::<api::ErrorWrapper>().await?.error;
-            Err(Error::APIError(err))
+            Err(Error::API(err))
         }
     }
 
@@ -322,7 +322,7 @@ impl Client {
                 .into_json_deserialize::<api::ErrorWrapper>()
                 .expect("Bug: client couldn't deserialize api error response")
                 .error;
-            Err(Error::APIError(err))
+            Err(Error::API(err))
         }
     }
 
@@ -379,7 +379,7 @@ impl Client {
             .await?;
         match response.status() {
             surf::StatusCode::Ok => Ok(response.body_json::<R>().await?),
-            _ => Err(Error::APIError(
+            _ => Err(Error::API(
                 response
                     .body_json::<api::ErrorWrapper>()
                     .await
@@ -405,7 +405,7 @@ impl Client {
             200 => Ok(response
                 .into_json_deserialize()
                 .expect("Bug: client couldn't deserialize api response")),
-            _ => Err(Error::APIError(
+            _ => Err(Error::API(
                 response
                     .into_json_deserialize::<api::ErrorWrapper>()
                     .expect("Bug: client couldn't deserialize api error response")
@@ -629,7 +629,7 @@ mod unit {
     async_test!(engine_error_response_async, {
         let (_m, expected) = mock_engine();
         let response = mocked_client().engine("davinci").await;
-        if let Result::Err(Error::APIError(msg)) = response {
+        if let Result::Err(Error::API(msg)) = response {
             assert_eq!(expected, msg);
         }
     });
@@ -637,7 +637,7 @@ mod unit {
     sync_test!(engine_error_response_sync, {
         let (_m, expected) = mock_engine();
         let response = mocked_client().engine_sync("davinci");
-        if let Result::Err(Error::APIError(msg)) = response {
+        if let Result::Err(Error::API(msg)) = response {
             assert_eq!(expected, msg);
         }
     });
@@ -751,7 +751,7 @@ mod integration {
         T: std::fmt::Debug,
     {
         match result {
-            Err(Error::APIError(api::ErrorMessage {
+            Err(Error::API(api::ErrorMessage {
                 message,
                 error_type,
             })) => {
