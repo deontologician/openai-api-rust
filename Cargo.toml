@@ -10,6 +10,9 @@ repository = "https://github.com/deontologician/openai-api-rust/"
 keywords = ["openai", "gpt3"]
 categories = ["api-bindings", "asynchronous"]
 
+[build]
+rustdocflags = ["--all-features"]
+
 [features]
 default = ["sync", "async"]
 sync = ["ureq"]
