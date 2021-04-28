@@ -208,7 +208,7 @@ pub mod api {
 pub enum Error {
     /// An error returned by the API itself
     #[error("API returned an Error: {}", .0.message)]
-    API(api::ErrorMessage),
+    Api(api::ErrorMessage),
     /// An error the client discovers before talking to the API
     #[error("Bad arguments: {0}")]
     BadArguments(String),
@@ -223,7 +223,7 @@ pub enum Error {
 
 impl From<api::ErrorMessage> for Error {
     fn from(e: api::ErrorMessage) -> Self {
-        Error::API(e)
+        Error::Api(e)
     }
 }
 
@@ -356,7 +356,7 @@ impl Client {
             Ok(response.body_json::<T>().await?)
         } else {
             let err = response.body_json::<api::ErrorWrapper>().await?.error;
-            Err(Error::API(err))
+            Err(Error::Api(err))
         }
     }
 
@@ -378,7 +378,7 @@ impl Client {
                 .into_json_deserialize::<api::ErrorWrapper>()
                 .expect("Bug: client couldn't deserialize api error response")
                 .error;
-            Err(Error::API(err))
+            Err(Error::Api(err))
         }
     }
 
@@ -435,7 +435,7 @@ impl Client {
             .await?;
         match response.status() {
             surf::StatusCode::Ok => Ok(response.body_json::<R>().await?),
-            _ => Err(Error::API(
+            _ => Err(Error::Api(
                 response
                     .body_json::<api::ErrorWrapper>()
                     .await
@@ -461,7 +461,7 @@ impl Client {
             200 => Ok(response
                 .into_json_deserialize()
                 .expect("Bug: client couldn't deserialize api response")),
-            _ => Err(Error::API(
+            _ => Err(Error::Api(
                 response
                     .into_json_deserialize::<api::ErrorWrapper>()
                     .expect("Bug: client couldn't deserialize api error response")
@@ -685,7 +685,7 @@ mod unit {
     async_test!(engine_error_response_async, {
         let (_m, expected) = mock_engine();
         let response = mocked_client().engine("davinci").await;
-        if let Result::Err(Error::API(msg)) = response {
+        if let Result::Err(Error::Api(msg)) = response {
             assert_eq!(expected, msg);
         }
     });
@@ -693,7 +693,7 @@ mod unit {
     sync_test!(engine_error_response_sync, {
         let (_m, expected) = mock_engine();
         let response = mocked_client().engine_sync("davinci");
-        if let Result::Err(Error::API(msg)) = response {
+        if let Result::Err(Error::Api(msg)) = response {
             assert_eq!(expected, msg);
         }
     });
@@ -767,8 +767,9 @@ mod unit {
         let response = mocked_client().complete_prompt_sync(args)?;
         assert_completion_equal(response, expected);
         m.assert();
-    })
-;}
+    });
+}
+
 #[cfg(test)]
 mod integration {
     use crate::{
