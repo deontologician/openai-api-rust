@@ -1,6 +1,8 @@
 /// `OpenAI` API client library
 #[macro_use]
 extern crate derive_builder;
+#[macro_use]
+extern crate maybe_async;
 
 use thiserror::Error;
 
@@ -291,15 +293,15 @@ impl surf::middleware::Middleware for BearerToken {
     }
 }
 
-#[cfg(feature = "async")]
-fn async_client(token: &str, base_url: &str) -> surf::Client {
+#[async_impl]
+fn client(token: &str, base_url: &str) -> surf::Client {
     let mut async_client = surf::client();
     async_client.set_base_url(surf::Url::parse(base_url).expect("Static string should parse"));
     async_client.with(BearerToken::new(token))
 }
 
-#[cfg(feature = "sync")]
-fn sync_client(token: &str) -> ureq::Agent {
+#[sync_impl]
+fn client(token: &str) -> ureq::Agent {
     ureq::agent().auth_kind("Bearer", token).build()
 }
 
