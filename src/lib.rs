@@ -82,10 +82,10 @@ pub mod api {
         /// ```
         /// # use openai_api::api::{CompletionArgs, CompletionArgsBuilder};
         /// # use std::convert::{TryInto, TryFrom};
-        /// # fn main() -> Result<(), String> {
+        /// # fn main() -> anyhow::Result<()> {
         /// let builder = CompletionArgs::builder().temperature(0.7);
         /// let args: CompletionArgs = builder.try_into()?;
-        /// # Ok::<(), String>(())
+        /// # Ok::<(), anyhow::Error>(())
         /// # }
         /// ```
         #[builder(default = "1.0")]
@@ -130,13 +130,12 @@ pub mod api {
     }
 
     impl TryFrom<CompletionArgsBuilder> for CompletionArgs {
-        type Error = String;
+        type Error = CompletionArgsBuilderError;
 
         fn try_from(builder: CompletionArgsBuilder) -> Result<Self, Self::Error> {
             builder.build()
         }
     }
-
     /// Represents a non-streamed completion response
     #[derive(Deserialize, Debug, Clone)]
     pub struct Completion {
@@ -215,12 +214,12 @@ pub enum Error {
     #[error("Bad arguments: {0}")]
     BadArguments(String),
     /// Network / protocol related errors
-    #[cfg(feature = "async")]
+    #[cfg(feature = "is_async")]
     #[error("Error at the protocol level: {0}")]
-    AsyncProtocol(surf::Error),
-    #[cfg(feature = "sync")]
+    Protocol(surf::Error),
+    #[cfg(feature = "is_sync")]
     #[error("Error at the protocol level, sync client")]
-    SyncProtocol(ureq::Error),
+    Protocol(ureq::Error),
 }
 
 impl From<api::ErrorMessage> for Error {
@@ -235,61 +234,60 @@ impl From<String> for Error {
     }
 }
 
-#[cfg(feature = "async")]
+#[cfg(feature = "is_async")]
 impl From<surf::Error> for Error {
     fn from(e: surf::Error) -> Self {
-        Error::AsyncProtocol(e)
+        Error::Protocol(e)
     }
 }
 
-#[cfg(feature = "sync")]
+#[cfg(feature = "is_sync")]
 impl From<ureq::Error> for Error {
     fn from(e: ureq::Error) -> Self {
-        Error::SyncProtocol(e)
+        Error::Protocol(e)
     }
 }
 
-/// Authentication middleware
-#[cfg(feature = "async")]
-struct BearerToken {
-    token: String,
-}
-
-#[cfg(feature = "async")]
-impl std::fmt::Debug for BearerToken {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        // Get the first few characters to help debug, but not accidentally log key
-        write!(
-            f,
-            r#"Bearer {{ token: "{}" }}"#,
-            self.token.get(0..8).ok_or(std::fmt::Error)?
-        )
+#[cfg(feature = "is_async")]
+mod bearer {
+    /// Authentication middleware
+    pub(crate) struct BearerToken {
+        token: String,
     }
-}
 
-#[cfg(feature = "async")]
-impl BearerToken {
-    fn new(token: &str) -> Self {
-        Self {
-            token: String::from(token),
+    impl std::fmt::Debug for BearerToken {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            // Get the first few characters to help debug, but not accidentally log key
+            write!(
+                f,
+                r#"Bearer {{ token: "{}" }}"#,
+                self.token.get(0..8).ok_or(std::fmt::Error)?
+            )
         }
     }
-}
 
-#[cfg(feature = "async")]
-#[surf::utils::async_trait]
-impl surf::middleware::Middleware for BearerToken {
-    async fn handle(
-        &self,
-        mut req: surf::Request,
-        client: surf::Client,
-        next: surf::middleware::Next<'_>,
-    ) -> surf::Result<surf::Response> {
-        log::debug!("Request: {:?}", req);
-        req.insert_header("Authorization", format!("Bearer {}", self.token));
-        let response: surf::Response = next.run(req, client).await?;
-        log::debug!("Response: {:?}", response);
-        Ok(response)
+    impl BearerToken {
+        pub fn new(token: &str) -> Self {
+            Self {
+                token: String::from(token),
+            }
+        }
+    }
+
+    #[surf::utils::async_trait]
+    impl surf::middleware::Middleware for BearerToken {
+        async fn handle(
+            &self,
+            mut req: surf::Request,
+            client: surf::Client,
+            next: surf::middleware::Next<'_>,
+        ) -> surf::Result<surf::Response> {
+            log::debug!("Request: {:?}", req);
+            req.insert_header("Authorization", format!("Bearer {}", self.token));
+            let response: surf::Response = next.run(req, client).await?;
+            log::debug!("Response: {:?}", response);
+            Ok(response)
+        }
     }
 }
 
@@ -297,22 +295,21 @@ impl surf::middleware::Middleware for BearerToken {
 fn client(token: &str, base_url: &str) -> surf::Client {
     let mut async_client = surf::client();
     async_client.set_base_url(surf::Url::parse(base_url).expect("Static string should parse"));
-    async_client.with(BearerToken::new(token))
+    async_client.with(bearer::BearerToken::new(token))
 }
 
 #[sync_impl]
-fn client(token: &str) -> ureq::Agent {
+fn client(token: &str, _base_url: &str) -> ureq::Agent {
     ureq::agent().auth_kind("Bearer", token).build()
 }
 
 /// Client object. Must be constructed to talk to the API.
 #[derive(Debug, Clone)]
 pub struct Client {
-    #[cfg(feature = "async")]
-    async_client: surf::Client,
-    #[cfg(feature = "sync")]
-    sync_client: ureq::Agent,
-    #[cfg(feature = "sync")]
+    #[cfg(feature = "is_async")]
+    client: surf::Client,
+    #[cfg(feature = "is_sync")]
+    client: ureq::Agent,
     base_url: String,
 }
 
@@ -322,38 +319,30 @@ impl Client {
     pub fn new(token: &str) -> Self {
         let base_url: String = "https://api.openai.com/v1/".into();
         Self {
-            #[cfg(feature = "async")]
-            async_client: async_client(token, &base_url),
-            #[cfg(feature = "sync")]
-            sync_client: sync_client(token),
-            #[cfg(feature = "sync")]
+            client: client(token, &base_url),
             base_url,
         }
     }
 
     // Allow setting the api root in the tests
     #[cfg(test)]
-    fn set_api_root(mut self, base_url: &str) -> Self {
-        #[cfg(feature = "async")]
+    pub fn set_api_root(&mut self, base_url: String) {
+        #[cfg(feature = "is_async")]
         {
-            self.async_client.set_base_url(
-                surf::Url::parse(base_url).expect("static URL expected to parse correctly"),
+            self.client.set_base_url(
+                surf::Url::parse(&base_url).expect("static URL expected to parse correctly"),
             );
         }
-        #[cfg(feature = "sync")]
-        {
-            self.base_url = String::from(base_url);
-        }
-        self
+        self.base_url = base_url;
     }
 
     /// Private helper for making gets
-    #[cfg(feature = "async")]
+    #[maybe_async::async_impl]
     async fn get<T>(&self, endpoint: &str) -> Result<T>
     where
         T: serde::de::DeserializeOwned,
     {
-        let mut response = self.async_client.get(endpoint).await?;
+        let mut response = self.client.get(endpoint).await?;
         if let surf::StatusCode::Ok = response.status() {
             Ok(response.body_json::<T>().await?)
         } else {
@@ -362,15 +351,12 @@ impl Client {
         }
     }
 
-    #[cfg(feature = "sync")]
-    fn get_sync<T>(&self, endpoint: &str) -> Result<T>
+    #[maybe_async::sync_impl]
+    fn get<T>(&self, endpoint: &str) -> Result<T>
     where
         T: serde::de::DeserializeOwned,
     {
-        let response = dbg!(self
-            .sync_client
-            .get(&format!("{}{}", self.base_url, endpoint)))
-        .call();
+        let response = dbg!(self.client.get(&format!("{}{}", self.base_url, endpoint))).call();
         if let 200 = response.status() {
             Ok(response
                 .into_json_deserialize()
@@ -390,20 +376,9 @@ impl Client {
     ///
     /// # Errors
     /// - `Error::APIError` if the server returns an error
-    #[cfg(feature = "async")]
+    #[maybe_async::maybe_async]
     pub async fn engines(&self) -> Result<Vec<api::EngineInfo>> {
         self.get("engines").await.map(|r: api::Container<_>| r.data)
-    }
-
-    /// Lists the currently available engines.
-    ///
-    /// Provides basic information about each one such as the owner and availability.
-    ///
-    /// # Errors
-    /// - `Error::APIError` if the server returns an error
-    #[cfg(feature = "sync")]
-    pub fn engines_sync(&self) -> Result<Vec<api::EngineInfo>> {
-        self.get_sync("engines").map(|r: api::Container<_>| r.data)
     }
 
     /// Retrieves an engine instance
@@ -412,26 +387,21 @@ impl Client {
     ///
     /// # Errors
     /// - `Error::APIError` if the server returns an error
-    #[cfg(feature = "async")]
+    #[maybe_async::maybe_async]
     pub async fn engine(&self, engine: &str) -> Result<api::EngineInfo> {
         self.get(&format!("engines/{}", engine)).await
     }
 
-    #[cfg(feature = "sync")]
-    pub fn engine_sync(&self, engine: &str) -> Result<api::EngineInfo> {
-        self.get_sync(&format!("engines/{}", engine))
-    }
-
     // Private helper to generate post requests. Needs to be a bit more flexible than
     // get because it should support SSE eventually
-    #[cfg(feature = "async")]
+    #[maybe_async::async_impl]
     async fn post<B, R>(&self, endpoint: &str, body: B) -> Result<R>
     where
         B: serde::ser::Serialize,
         R: serde::de::DeserializeOwned,
     {
         let mut response = self
-            .async_client
+            .client
             .post(endpoint)
             .body(surf::Body::from_json(&body)?)
             .await?;
@@ -447,14 +417,14 @@ impl Client {
         }
     }
 
-    #[cfg(feature = "sync")]
-    fn post_sync<B, R>(&self, endpoint: &str, body: B) -> Result<R>
+    #[maybe_async::sync_impl]
+    fn post<B, R>(&self, endpoint: &str, body: B) -> Result<R>
     where
         B: serde::ser::Serialize,
         R: serde::de::DeserializeOwned,
     {
         let response = self
-            .sync_client
+            .client
             .post(&format!("{}{}", self.base_url, endpoint))
             .send_json(
                 serde_json::to_value(body).expect("Bug: client couldn't serialize its own type"),
@@ -476,7 +446,7 @@ impl Client {
     ///
     /// # Errors
     ///  - `Error::APIError` if the api returns an error
-    #[cfg(feature = "async")]
+    #[maybe_async::maybe_async]
     pub async fn complete_prompt(
         &self,
         prompt: impl Into<api::CompletionArgs>,
@@ -486,69 +456,34 @@ impl Client {
             .post(&format!("engines/{}/completions", args.engine), args)
             .await?)
     }
-
-    /// Get predicted completion of the prompt synchronously
-    ///
-    /// # Error
-    /// - `Error::APIError` if the api returns an error
-    #[cfg(feature = "sync")]
-    pub fn complete_prompt_sync(
-        &self,
-        prompt: impl Into<api::CompletionArgs>,
-    ) -> Result<api::Completion> {
-        let args = prompt.into();
-        self.post_sync(&format!("engines/{}/completions", args.engine), args)
-    }
 }
-
-// TODO: add a macro to de-boilerplate the sync and async tests
-
-#[allow(unused_macros)]
-macro_rules! async_test {
-    ($test_name: ident, $test_body: block) => {
-        #[cfg(feature = "async")]
-        #[tokio::test]
-        async fn $test_name() -> crate::Result<()> {
-            $test_body;
-            Ok(())
-        }
-    };
-}
-
-#[allow(unused_macros)]
-macro_rules! sync_test {
-    ($test_name: ident, $test_body: expr) => {
-        #[cfg(feature = "sync")]
-        #[test]
-        fn $test_name() -> crate::Result<()> {
-            $test_body;
-            Ok(())
-        }
-    };
-}
-
 #[cfg(test)]
 mod unit {
 
-    use mockito::Mock;
-
-    use crate::{
-        api::{self, Completion, CompletionArgs, EngineInfo},
-        Client, Error,
-    };
+    use crate::{api, Client, Error};
 
     fn mocked_client() -> Client {
         let _ = env_logger::builder().is_test(true).try_init();
-        Client::new("bogus").set_api_root(&format!("{}/", mockito::server_url()))
+        let mut client = Client::new("bogus");
+        client.set_api_root(format!("{}/", mockito::server_url()).to_owned());
+        client
     }
 
+    #[cfg(feature = "is_async")]
+    #[tokio::test]
+    async fn can_create_client() {
+        let _c = mocked_client();
+    }
+
+    #[cfg(feature = "is_sync")]
     #[test]
     fn can_create_client() {
         let _c = mocked_client();
     }
 
-    #[test]
-    fn parse_engine_info() -> Result<(), Box<dyn std::error::Error>> {
+    #[cfg(feature = "is_async")]
+    #[tokio::test]
+    async fn parse_engine_info() -> Result<(), Box<dyn std::error::Error>> {
         let example = r#"{
             "id": "ada",
             "object": "engine",
@@ -567,7 +502,10 @@ mod unit {
         Ok(())
     }
 
-    fn mock_engines() -> (Mock, Vec<EngineInfo>) {
+    #[cfg(feature = "is_async")]
+    #[tokio::test]
+    async fn parse_engines() {
+        use api::EngineInfo;
         let mock = mockito::mock("GET", "/engines")
             .with_status(200)
             .with_header("content-type", "application/json")
@@ -648,22 +586,14 @@ mod unit {
                 ready: true,
             },
         ];
-        (mock, expected)
+        let response = mocked_client().engines().await.unwrap();
+        assert_eq!(response, expected);
+        mock.assert()
     }
 
-    async_test!(parse_engines_async, {
-        let (_m, expected) = mock_engines();
-        let response = mocked_client().engines().await?;
-        assert_eq!(response, expected);
-    });
-
-    sync_test!(parse_engines_sync, {
-        let (_m, expected) = mock_engines();
-        let response = mocked_client().engines_sync()?;
-        assert_eq!(response, expected);
-    });
-
-    fn mock_engine() -> (Mock, api::ErrorMessage) {
+    #[cfg(feature = "is_async")]
+    #[tokio::test]
+    async fn engine_error_response() {
         let mock = mockito::mock("GET", "/engines/davinci")
             .with_status(404)
             .with_header("content-type", "application/json")
@@ -681,25 +611,16 @@ mod unit {
             message: "Some kind of error happened".into(),
             error_type: "some_error_type".into(),
         };
-        (mock, expected)
-    }
-
-    async_test!(engine_error_response_async, {
-        let (_m, expected) = mock_engine();
         let response = mocked_client().engine("davinci").await;
         if let Result::Err(Error::Api(msg)) = response {
             assert_eq!(expected, msg);
         }
-    });
+        mock.assert();
+    }
 
-    sync_test!(engine_error_response_sync, {
-        let (_m, expected) = mock_engine();
-        let response = mocked_client().engine_sync("davinci");
-        if let Result::Err(Error::Api(msg)) = response {
-            assert_eq!(expected, msg);
-        }
-    });
-    fn mock_completion() -> crate::Result<(Mock, CompletionArgs, Completion)> {
+    #[cfg(feature = "is_async")]
+    #[tokio::test]
+    async fn completion_args() {
         let mock = mockito::mock("POST", "/engines/davinci/completions")
             .with_status(200)
             .with_header("content-type", "application/json")
@@ -729,7 +650,8 @@ mod unit {
             .top_p(1.0)
             .n(1)
             .stop(vec!["\n".into()])
-            .build()?;
+            .build()
+            .unwrap();
         let expected = api::Completion {
             id: "cmpl-uqkvlQyYK7bGYrRHQ0eXlWi7".into(),
             created: 1589478378,
@@ -741,43 +663,22 @@ mod unit {
                 finish_reason: "length".into(),
             }],
         };
-        Ok((mock, args, expected))
-    }
-
-    // Defines boilerplate here. The Completion can't derive Eq since it contains
-    // floats in various places.
-    fn assert_completion_equal(a: Completion, b: Completion) {
-        assert_eq!(a.model, b.model);
-        assert_eq!(a.id, b.id);
-        assert_eq!(a.created, b.created);
-        let (a_choice, b_choice) = (&a.choices[0], &b.choices[0]);
+        let response = mocked_client().complete_prompt(args).await.unwrap();
+        assert_eq!(response.model, expected.model);
+        assert_eq!(response.id, expected.id);
+        assert_eq!(response.created, expected.created);
+        let (a_choice, b_choice) = (&response.choices[0], &expected.choices[0]);
         assert_eq!(a_choice.text, b_choice.text);
         assert_eq!(a_choice.index, b_choice.index);
         assert!(a_choice.logprobs.is_none());
         assert_eq!(a_choice.finish_reason, b_choice.finish_reason);
+        mock.assert();
     }
-
-    async_test!(completion_args_async, {
-        let (m, args, expected) = mock_completion()?;
-        let response = mocked_client().complete_prompt(args).await?;
-        assert_completion_equal(response, expected);
-        m.assert();
-    });
-
-    sync_test!(completion_args_sync, {
-        let (m, args, expected) = mock_completion()?;
-        let response = mocked_client().complete_prompt_sync(args)?;
-        assert_completion_equal(response, expected);
-        m.assert();
-    });
 }
 
 #[cfg(test)]
 mod integration {
-    use crate::{
-        api::{self, Completion},
-        Client,
-    };
+    use crate::{api, Client};
     /// Used by tests to get a client to the actual api
     fn get_client() -> Client {
         let _ = env_logger::builder().is_test(true).try_init();
@@ -786,16 +687,14 @@ mod integration {
         );
         Client::new(&sk)
     }
-
-    async_test!(can_get_engines_async, {
-        let client = get_client();
-        client.engines().await?
-    });
-
-    sync_test!(can_get_engines_sync, {
+    #[cfg(feature = "is_async")]
+    #[tokio::test]
+    async fn can_get_engines() {
         let client = get_client();
         let engines = client
-            .engines_sync()?
+            .engines()
+            .await
+            .unwrap()
             .into_iter()
             .map(|ei| ei.id)
             .collect::<Vec<_>>();
@@ -803,93 +702,60 @@ mod integration {
         assert!(engines.contains(&"babbage".into()));
         assert!(engines.contains(&"curie".into()));
         assert!(engines.contains(&"davinci".into()));
-    });
+    }
+    #[cfg(feature = "is_sync")]
+    #[test]
+    fn can_get_engines() {
+        let client = get_client();
+        let engines = client
+            .engines()
+            .unwrap()
+            .into_iter()
+            .map(|ei| ei.id)
+            .collect::<Vec<_>>();
+        assert!(engines.contains(&"ada".into()));
+        assert!(engines.contains(&"babbage".into()));
+        assert!(engines.contains(&"curie".into()));
+        assert!(engines.contains(&"davinci".into()));
+    }
 
-    fn assert_engine_correct(engine_id: &str, info: api::EngineInfo) {
-        assert_eq!(info.id, engine_id);
+    #[cfg(feature = "is_async")]
+    #[tokio::test]
+    async fn can_get_engine() {
+        let client = get_client();
+        let info = client.engine("ada").await.unwrap();
+        assert_eq!(info.id, "ada");
         assert!(info.ready);
         assert_eq!(info.owner, "openai");
     }
-    async_test!(can_get_engine_async, {
-        let client = get_client();
-        assert_engine_correct("ada", client.engine("ada").await?);
-    });
 
-    sync_test!(can_get_engine_sync, {
+    #[cfg(feature = "is_async")]
+    #[tokio::test]
+    async fn complete_string() {
         let client = get_client();
-        assert_engine_correct("ada", client.engine_sync("ada")?);
-    });
-
-    async_test!(complete_string_async, {
-        let client = get_client();
-        client.complete_prompt("Hey there").await?;
-    });
-
-    sync_test!(complete_string_sync, {
-        let client = get_client();
-        client.complete_prompt_sync("Hey there")?;
-    });
-
-    fn create_args() -> api::CompletionArgs {
-        api::CompletionArgsBuilder::default()
-            .prompt("Once upon a time,")
-            .max_tokens(10)
-            .temperature(0.5)
-            .top_p(0.5)
-            .n(1)
-            .logprobs(3)
-            .echo(false)
-            .stop(vec!["\n".into()])
-            .presence_penalty(0.5)
-            .frequency_penalty(0.5)
-            .logit_bias(maplit::hashmap! {
-                "1".into() => 1.0,
-                "23".into() => 0.0,
-            })
-            .build()
-            .expect("Bug: build should succeed")
+        client.complete_prompt("Hey there").await.unwrap();
     }
-    async_test!(complete_explicit_params_async, {
-        let client = get_client();
-        let args = create_args();
-        client.complete_prompt(args).await?;
-    });
 
-    sync_test!(complete_explicit_params_sync, {
+    #[cfg(feature = "is_async")]
+    #[tokio::test]
+    async fn complete_stop_condition() {
         let client = get_client();
-        let args = create_args();
-        client.complete_prompt_sync(args)?
-    });
-
-    fn stop_condition_args() -> api::CompletionArgs {
-        api::CompletionArgs::builder()
-            .prompt(
-                r#"
+        let args = {
+            api::CompletionArgs::builder()
+                .prompt(
+                    r#"
 Q: Please type `#` now
 A:"#,
-            )
-            // turn temp & top_p way down to prevent test flakiness
-            .temperature(0.0)
-            .top_p(0.0)
-            .max_tokens(100)
-            .stop(vec!["#".into(), "\n".into()])
-            .build()
-            .expect("Bug: build should succeed")
+                )
+                // turn temp & top_p way down to prevent test flakiness
+                .temperature(0.0)
+                .top_p(0.0)
+                .max_tokens(100)
+                .stop(vec!["#".into(), "\n".into()])
+                .build()
+                .expect("Bug: build should succeed")
+        };
+        let result = &client.complete_prompt(args).await.unwrap().choices[0].finish_reason;
+        assert_eq!(result, "stop",);
     }
-
-    fn assert_completion_finish_reason(completion: Completion) {
-        assert_eq!(completion.choices[0].finish_reason, "stop",);
-    }
-
-    async_test!(complete_stop_condition_async, {
-        let client = get_client();
-        let args = stop_condition_args();
-        assert_completion_finish_reason(client.complete_prompt(args).await?);
-    });
-
-    sync_test!(complete_stop_condition_sync, {
-        let client = get_client();
-        let args = stop_condition_args();
-        assert_completion_finish_reason(client.complete_prompt_sync(args)?);
-    });
 }
