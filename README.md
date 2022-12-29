@@ -24,7 +24,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!(
         "{}{}",
         prompt,
-        client.complete(prompt.as_str()).await?
+        client.complete_prompt(prompt.as_str()).await?
     );
     Ok(())
 }
