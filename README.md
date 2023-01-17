@@ -1,5 +1,5 @@
 # openai-api-rust
-![docs](https://docs.rs/openai-api/badge.svg)
+[![docs](https://docs.rs/openai-api/badge.svg)](https://docs.rs/openai-api/)
 [![Crates.io](https://img.shields.io/crates/v/openai-api.svg)](https://crates.io/crates/openai-api)
 ![build](https://github.com/deontologician/openai-api-rust/workflows/Continuous%20Integration/badge.svg)
 
