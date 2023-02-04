@@ -45,7 +45,7 @@ To configure the prompt more explicitly, you can use the `CompletionArgs` builde
 ```rust
 let args = openai_api::api::CompletionArgs::builder()
         .prompt("Once upon a time,")
-        .engine("davinci")
+        .engine("text-davinci-003")
         .max_tokens(20)
         .temperature(0.7)
         .top_p(0.9)
